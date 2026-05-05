@@ -17,8 +17,7 @@ use extism_pdk::*;
 
 use crate::error::PluginError;
 use crate::free_mode::{
-    build_landing_request, parse_http_response as parse_free_response, parse_landing_page,
-    ParsedLanding,
+    build_landing_request, parse_http_response, parse_landing_page, ParsedLanding,
 };
 use crate::premium_mode::{
     build_get_token_request, parse_credential_response, parse_get_token_response, PremiumToken,
@@ -54,12 +53,7 @@ pub fn extract_links(url: String) -> FnResult<String> {
         ResolvedMode::Premium {
             token,
             landing_hint,
-        } => build_premium_response(
-            &url,
-            landing_hint.as_ref().and_then(|p| p.filename.clone()),
-            landing_hint.as_ref().and_then(|p| p.size_bytes),
-            token,
-        ),
+        } => build_premium_response(&url, landing_hint, token),
         ResolvedMode::Free { parsed } => build_free_response(&url, parsed),
     };
     Ok(serde_json::to_string(&response)?)
@@ -105,10 +99,7 @@ fn select_mode_and_resolve(url: &str) -> FnResult<ResolvedMode> {
                 token,
                 landing_hint: None,
             }),
-            Err(PluginError::InvalidCredentials) | Err(PluginError::AccountExpired) => {
-                // Documented fallback to free mode when the API
-                // rejects the configured key. Surfaces the same
-                // metadata as if the user had no credential.
+            Err(e) if is_credential_failure(&e) => {
                 let parsed = fetch_and_parse_landing(url)?;
                 Ok(ResolvedMode::Free { parsed })
             }
@@ -121,43 +112,38 @@ fn select_mode_and_resolve(url: &str) -> FnResult<ResolvedMode> {
     }
 }
 
+fn is_credential_failure(err: &PluginError) -> bool {
+    matches!(
+        err,
+        PluginError::InvalidCredentials | PluginError::AccountExpired
+    )
+}
+
 fn read_api_key() -> Option<String> {
-    // SAFETY: `get_credential` is registered by the plugin host
-    // (see src-tauri/src/adapters/driven/plugin/host_functions.rs:
-    // `make_get_credential_function`). Returns Err when no credential
-    // is configured for our service — we map it to None so the caller
-    // can decide whether to fall back to free mode.
-    let raw = match unsafe { get_credential(SERVICE_NAME.to_string()) } {
-        Ok(json) => json,
-        Err(_) => return None,
-    };
+    // SAFETY: host registers `get_credential` in the `ExtismHost` namespace before
+    // any export is callable; ABI marshalled by `#[host_fn]`. See
+    // src-tauri/src/adapters/driven/plugin/host_functions.rs.
+    let raw = unsafe { get_credential(SERVICE_NAME.to_string()) }.ok()?;
     parse_credential_response(&raw).ok()
 }
 
 fn try_premium(url: &str, api_key: &str) -> Result<PremiumToken, PluginError> {
     let req = build_get_token_request(url, api_key)?;
-    // SAFETY: see `fetch_and_parse_landing` — same host-fn invariants.
+    // SAFETY: see `fetch_and_parse_landing`.
     let raw = unsafe { http_request(req) }
         .map_err(|e| PluginError::HostResponse(format!("http_request: {e}")))?;
-    let resp = parse_free_response(&raw)?;
+    let resp = parse_http_response(&raw)?;
     let body = resp.into_success_body()?;
     parse_get_token_response(&body)
 }
 
 fn fetch_and_parse_landing(url: &str) -> FnResult<ParsedLanding> {
     let req = build_landing_request(url).map_err(error_to_fn_error)?;
-    // SAFETY: `http_request` is resolved by the Vortex plugin host at
-    // load time (see src-tauri/src/adapters/driven/plugin/host_functions.rs:
-    // `make_http_request_function`). Invariants:
-    //   1. The host registers `http_request` in the `ExtismHost`
-    //      namespace before any `#[plugin_fn]` export is callable.
-    //   2. The ABI is `(I64) -> I64`; the `#[host_fn]` macro marshals
-    //      `String` in/out through Extism memory handles.
-    //   3. The host gates the call on the `http` capability declared in
-    //      `plugin.toml`; rejections return an error that `?` surfaces.
-    //   4. Inputs/outputs are owned JSON strings — no aliasing concerns.
+    // SAFETY: host registers `http_request` in the `ExtismHost` namespace before
+    // any export is callable; capability is gated on the `http` declaration in
+    // `plugin.toml`. See src-tauri/src/adapters/driven/plugin/host_functions.rs.
     let raw = unsafe { http_request(req)? };
-    let resp = parse_free_response(&raw).map_err(error_to_fn_error)?;
+    let resp = parse_http_response(&raw).map_err(error_to_fn_error)?;
     let body = resp.into_success_body().map_err(error_to_fn_error)?;
     parse_landing_page(&body).map_err(error_to_fn_error)
 }

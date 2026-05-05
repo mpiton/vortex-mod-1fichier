@@ -22,13 +22,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::PluginError;
-
-const USER_AGENT: &str = "Mozilla/5.0 (Vortex/1.0; +https://vortex-app.com) 1fichierPlugin/1.0";
+use crate::USER_AGENT;
 
 // ── HTTP envelope ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct HttpRequest {
+pub(crate) struct HttpRequest {
     pub method: String,
     pub url: String,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -46,9 +45,9 @@ pub struct HttpResponse {
     pub body: String,
 }
 
-/// Cap landing pages to stop a malicious server forcing megabyte-scale
-/// regex scans. Real 1fichier landing pages weigh well under 200 KB.
-pub const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// Cap landing pages so a malicious server can't force megabyte-scale
+/// regex scans. Real 1fichier landing pages weigh well under 100 KB.
+pub(crate) const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 impl HttpResponse {
     pub fn into_success_body(self) -> Result<String, PluginError> {
@@ -142,14 +141,17 @@ pub fn parse_landing_page(html: &str) -> Result<ParsedLanding, PluginError> {
 }
 
 fn is_offline_page(html: &str) -> bool {
-    let needles = [
-        "the file you are trying to access is no longer available",
-        "the requested file could not be found",
-        "file not found",
-        "fichier introuvable",
-    ];
-    let lower = html.to_ascii_lowercase();
-    needles.iter().any(|n| lower.contains(n))
+    offline_regex().is_match(html)
+}
+
+fn offline_regex() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(
+            r"(?i)the file you are trying to access is no longer available|the requested file could not be found|file not found|fichier introuvable",
+        )
+        .expect("offline_regex: compile-time constant must compile")
+    })
 }
 
 fn locate_filename(html: &str) -> Option<String> {
@@ -161,10 +163,12 @@ fn locate_size_text(html: &str) -> Option<String> {
 }
 
 fn locate_wait_seconds(html: &str) -> Option<u32> {
-    let caps = wait_regex().captures(html)?;
-    // The regex has three alternations; whichever group matched holds
-    // the second value.
-    (1..=caps.len() - 1).find_map(|i| caps.get(i).and_then(|m| m.as_str().parse().ok()))
+    wait_regex()
+        .captures(html)?
+        .iter()
+        .skip(1)
+        .flatten()
+        .find_map(|m| m.as_str().parse().ok())
 }
 
 fn detect_captcha(html: &str) -> bool {
@@ -179,10 +183,6 @@ fn capture(html: &str, re: &Regex) -> Option<String> {
 fn filename_regex() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        // The landing page renders the filename inside a `<th>` cell of
-        // the metadata table:
-        //   <th class="normal">Filename :</th><td>archive.zip</td>
-        // We match the literal label and capture the next `<td>`.
         Regex::new(r#"(?is)Filename\s*:\s*</th>\s*<td>([^<]+)</td>"#)
             .expect("filename_regex: compile-time constant must compile")
     })
@@ -191,8 +191,6 @@ fn filename_regex() -> &'static Regex {
 fn size_text_regex() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        // Same metadata table:
-        //   <th class="normal">Size :</th><td>123 MB</td>
         Regex::new(r#"(?is)Size\s*:\s*</th>\s*<td>([^<]+)</td>"#)
             .expect("size_text_regex: compile-time constant must compile")
     })
@@ -201,10 +199,9 @@ fn size_text_regex() -> &'static Regex {
 fn wait_regex() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        // The countdown is rendered as `<span class="...">60</span> ...
-        // seconds` or as JS `var c = 60`. We match the most stable form,
-        // the inline data attribute used by the form when present, and
-        // fall back to the visible counter span.
+        // Three alternations cover the form-data attribute, the visible
+        // countdown span, and the JS `var c = …` fallback that 1fichier
+        // ships on degraded slots.
         Regex::new(
             r#"(?is)(?:data-wait\s*=\s*"(\d+)"|class="countdown"[^>]*>(\d+)</span>|var\s+c\s*=\s*(\d+))"#,
         )
@@ -226,14 +223,19 @@ pub fn parse_size_bytes(text: &str) -> Option<u64> {
     let re = size_value_regex();
     let caps = re.captures(text)?;
     let value: f64 = caps.get(1)?.as_str().parse().ok()?;
-    let unit = caps.get(2)?.as_str().to_ascii_uppercase();
-    let multiplier: f64 = match unit.as_str() {
-        "B" => 1.0,
-        "KB" => 1024.0,
-        "MB" => 1024.0 * 1024.0,
-        "GB" => 1024.0 * 1024.0 * 1024.0,
-        "TB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return None,
+    let unit = caps.get(2)?.as_str();
+    let multiplier: f64 = if unit.eq_ignore_ascii_case("B") {
+        1.0
+    } else if unit.eq_ignore_ascii_case("KB") {
+        1024.0
+    } else if unit.eq_ignore_ascii_case("MB") {
+        1024.0 * 1024.0
+    } else if unit.eq_ignore_ascii_case("GB") {
+        1024.0 * 1024.0 * 1024.0
+    } else if unit.eq_ignore_ascii_case("TB") {
+        1024.0 * 1024.0 * 1024.0 * 1024.0
+    } else {
+        return None;
     };
     let bytes = (value * multiplier).round();
     if bytes.is_finite() && bytes >= 0.0 {

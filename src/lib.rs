@@ -39,6 +39,9 @@ use crate::free_mode::ParsedLanding;
 use crate::premium_mode::PremiumToken;
 use crate::url_matcher::UrlKind;
 
+pub(crate) const USER_AGENT: &str =
+    "Mozilla/5.0 (Vortex/1.0; +https://vortex-app.com) 1fichierPlugin/1.0";
+
 // ── IPC DTOs ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -73,19 +76,11 @@ pub struct FileLink {
 // ── Routing helpers ──────────────────────────────────────────────────────────
 
 pub fn handle_can_handle(url: &str) -> String {
-    bool_to_string(matches!(url_matcher::classify_url(url), UrlKind::File))
+    matches!(url_matcher::classify_url(url), UrlKind::File).to_string()
 }
 
 pub fn handle_supports_playlist(_url: &str) -> String {
-    bool_to_string(false)
-}
-
-fn bool_to_string(b: bool) -> String {
-    if b {
-        "true".into()
-    } else {
-        "false".into()
-    }
+    false.to_string()
 }
 
 pub fn ensure_file_url(url: &str) -> Result<(), PluginError> {
@@ -120,16 +115,19 @@ pub fn build_free_response(source_url: &str, parsed: ParsedLanding) -> ExtractLi
 
 pub fn build_premium_response(
     source_url: &str,
-    filename_hint: Option<String>,
-    size_hint: Option<u64>,
+    landing_hint: Option<ParsedLanding>,
     token: PremiumToken,
 ) -> ExtractLinksResponse {
     let id = url_matcher::extract_file_id(source_url).unwrap_or_default();
+    let (filename, size_bytes) = match landing_hint {
+        Some(p) => (p.filename, p.size_bytes),
+        None => (None, None),
+    };
     let link = FileLink {
         id,
         url: source_url.to_string(),
-        filename: filename_hint,
-        size_bytes: size_hint,
+        filename,
+        size_bytes,
         direct_url: Some(token.direct_url),
         resumable: true,
         wait_seconds: None,
@@ -234,12 +232,13 @@ mod tests {
     fn build_premium_response_carries_direct_url_and_traffic() {
         let r = build_premium_response(
             "https://1fichier.com/?abc123def456",
-            Some("archive.zip".into()),
-            Some(2048),
+            Some(sample_landing()),
             sample_token(),
         );
         assert_eq!(r.mode, "premium");
         let f = &r.files[0];
+        assert_eq!(f.filename.as_deref(), Some("archive.zip"));
+        assert_eq!(f.size_bytes, Some(2048));
         assert_eq!(
             f.direct_url.as_deref(),
             Some("https://download.1fichier.com/key/archive.zip")
@@ -248,5 +247,13 @@ mod tests {
         assert!(!f.requires_captcha);
         assert_eq!(f.traffic_used_bytes, Some(1024));
         assert_eq!(f.traffic_total_bytes, Some(1_000_000));
+    }
+
+    #[test]
+    fn build_premium_response_without_landing_hint_omits_filename_and_size() {
+        let r = build_premium_response("https://1fichier.com/?abc123def456", None, sample_token());
+        let f = &r.files[0];
+        assert_eq!(f.filename, None);
+        assert_eq!(f.size_bytes, None);
     }
 }

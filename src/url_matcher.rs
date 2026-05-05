@@ -10,10 +10,8 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
-use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UrlKind {
     /// Single file link: `1fichier.com/?<id>`
     File,
@@ -63,10 +61,7 @@ fn path_query_to_query(path_and_query: &str) -> Option<&str> {
 fn file_id_regex() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        // Capture the id token; it must be the first query token. Anything
-        // after `&` is ignored. The id is alphanumeric and at least 6
-        // chars long — short tokens are rejected so random fragments
-        // can't masquerade as ids.
+        // 6-char minimum keeps random short query tokens from masquerading as ids.
         Regex::new(r"^([A-Za-z0-9]{6,})(?:&|$)")
             .expect("file_id_regex: compile-time constant regex must compile")
     })

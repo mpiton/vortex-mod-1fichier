@@ -13,14 +13,12 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::PluginError;
+use crate::free_mode::HttpRequest;
+use crate::USER_AGENT;
 
 const ENDPOINT: &str = "https://api.1fichier.com/v1/download/get_token.cgi";
-const USER_AGENT: &str = "Mozilla/5.0 (Vortex/1.0; +https://vortex-app.com) 1fichierPlugin/1.0";
 
 /// Build the host `http_request` envelope for `get_token.cgi`.
-///
-/// The envelope is the same JSON shape used by the host's
-/// `http_request` host function (see free_mode::HttpRequest).
 pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, PluginError> {
     let mut headers = HashMap::new();
     headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
@@ -33,25 +31,13 @@ pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, 
     }
     let body_json = serde_json::to_string(&Body { url: file_url })?;
 
-    // We re-use the free-mode envelope shape — same field names so the
-    // host parses both with one schema.
-    #[derive(Serialize)]
-    struct Envelope {
-        method: &'static str,
-        url: &'static str,
-        #[serde(skip_serializing_if = "HashMap::is_empty")]
-        headers: HashMap<String, String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        body: Option<String>,
-    }
-
-    let env = Envelope {
-        method: "POST",
-        url: ENDPOINT,
+    let req = HttpRequest {
+        method: "POST".into(),
+        url: ENDPOINT.into(),
         headers,
         body: Some(body_json),
     };
-    serde_json::to_string(&env).map_err(PluginError::SerdeJson)
+    serde_json::to_string(&req).map_err(PluginError::SerdeJson)
 }
 
 /// Parsed payload from a successful `get_token.cgi` response.
@@ -122,21 +108,16 @@ fn classify_ko_message(msg: &str) -> PluginError {
     PluginError::InvalidApiResponse(msg.to_string())
 }
 
-/// Decoded credential payload returned by the host's `get_credential`
-/// host function.
-#[derive(Debug, Deserialize)]
-pub struct CredentialResponse {
-    #[serde(default)]
-    pub username: String,
-    pub password: String,
-}
-
 /// Parse the `get_credential` host-function output.
 ///
 /// 1fichier identifies users by API key only — the host stores it in
 /// the `password` slot. `username` is unused but accepted for forward
 /// compatibility (e.g. multi-user accounts).
 pub fn parse_credential_response(raw: &str) -> Result<String, PluginError> {
+    #[derive(Deserialize)]
+    struct CredentialResponse {
+        password: String,
+    }
     let resp: CredentialResponse = serde_json::from_str(raw).map_err(|e| {
         PluginError::HostResponse(format!("get_credential returned malformed JSON: {e}"))
     })?;
