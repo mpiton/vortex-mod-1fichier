@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><title>1fichier.com</title></head>
+<body>
+  <table>
+    <tr><th class="normal">Filename :</th><td>video.mp4</td></tr>
+    <tr><th class="normal">Size :</th><td>4.20 GB</td></tr>
+  </table>
+  <script>
+    // 1fichier embeds the countdown in JS for some pages.
+    var c = 30;
+    function tick() {
+      document.getElementById('cd').innerHTML = c;
+      if (c-- > 0) { setTimeout(tick, 1000); }
+    }
+    tick();
+  </script>
+  <form><span id="cd"></span></form>
+</body>
+</html>

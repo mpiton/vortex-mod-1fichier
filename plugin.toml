@@ -1,0 +1,20 @@
+[plugin]
+name = "vortex-mod-1fichier"
+version = "1.0.0"
+category = "hoster"
+author = "vortex-community"
+description = "1fichier hoster — free (60s wait + captcha stub) and premium (API key)"
+license = "GPL-3.0"
+min_vortex_version = "0.1.0"
+
+[capabilities]
+# 1fichier free mode scrapes the public landing page; premium mode hits
+# the JSON API. Both flow through the host's `http_request` host function.
+# Premium mode also reads the API key via `get_credential` (scoped to this
+# plugin's own service name).
+http = true
+
+[config]
+# Forward-compatible — the runtime does not yet parse plugin config but
+# we declare the schema now so the UI surface (task 15) can render it.
+preferred_mode = { type = "string", default = "auto", options = ["auto", "free", "premium"] }
