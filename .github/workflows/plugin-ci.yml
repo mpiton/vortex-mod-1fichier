@@ -11,10 +11,10 @@ jobs:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: read
-    uses: mpiton/vortex/.github/workflows/plugin-ci.yml@3abf4058eb1fa946b196b1a87cf459c4ffe73a4e
+    uses: mpiton/vortex/.github/workflows/plugin-ci.yml@9b3b7b3b7956150f7475ab409bb0eed424573bae
 
   plugin-release:
     if: ${{ startsWith(github.ref, 'refs/tags/') && github.actor == github.repository_owner }}
     permissions:
       contents: write
-    uses: mpiton/vortex/.github/workflows/plugin-release.yml@f91b43d62504522407e2e491aaf9d53dacd2726b
+    uses: mpiton/vortex/.github/workflows/plugin-release.yml@1b0cc276086cfc87165d63f8c5624fa3960ad2e9
