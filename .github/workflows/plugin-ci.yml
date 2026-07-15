@@ -1,0 +1,13 @@
+name: Plugin CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+jobs:
+  plugin-ci:
+    permissions:
+      contents: write
+    uses: mpiton/vortex/.github/workflows/plugin-ci.yml@e9edb3b1b60cd795f03cf1e5acba7d6b3731f753
