@@ -8,6 +8,13 @@ on:
 
 jobs:
   plugin-ci:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    permissions:
+      contents: read
+    uses: mpiton/vortex/.github/workflows/plugin-ci.yml@e9edb3b1b60cd795f03cf1e5acba7d6b3731f753
+
+  plugin-release:
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
     uses: mpiton/vortex/.github/workflows/plugin-ci.yml@e9edb3b1b60cd795f03cf1e5acba7d6b3731f753
