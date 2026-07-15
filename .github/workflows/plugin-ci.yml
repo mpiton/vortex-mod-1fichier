@@ -17,4 +17,4 @@ jobs:
     if: ${{ startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
-    uses: mpiton/vortex/.github/workflows/plugin-release.yml@3abf4058eb1fa946b196b1a87cf459c4ffe73a4e
+    uses: mpiton/vortex/.github/workflows/plugin-release.yml@676ce0e2bc3d11ad7e77eb7035772183d8c337a3
