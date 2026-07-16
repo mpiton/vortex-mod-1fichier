@@ -191,18 +191,19 @@ mod tests {
     }
 
     #[test]
-    fn build_validate_account_request_lists_root_folder_with_bearer_auth() {
+    fn build_validate_account_request_reads_user_offer_with_bearer_auth() {
         let json = build_validate_account_request("SECRETKEY").unwrap();
         let request: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(request["method"], "POST");
-        assert_eq!(request["url"], VALIDATE_ENDPOINT);
+        assert_eq!(
+            request["url"],
+            "https://api.1fichier.com/v1/user/info.cgi"
+        );
         assert_eq!(
             request["headers"]["Authorization"].as_str(),
             Some("Bearer SECRETKEY")
         );
-        let body: serde_json::Value =
-            serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
-        assert_eq!(body["folder_id"], 0);
+        assert!(request.get("body").is_none());
     }
 
     // ── Response parser ─────────────────────────────────────────────────────
@@ -282,9 +283,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_validate_account_response_accepts_ok_envelope() {
-        let body = r#"{"status":"OK","count":0,"items":[]}"#;
-        parse_validate_account_response(body).expect("valid API key");
+    fn parse_validate_account_response_accepts_download_capable_offers() {
+        for offer in [1, 2, 3] {
+            let body = format!(r#"{{"status":"OK","offer":{offer}}}"#);
+            parse_validate_account_response(&body).expect("premium API key");
+        }
+    }
+
+    #[test]
+    fn parse_validate_account_response_rejects_free_offer() {
+        let body = r#"{"status":"OK","offer":0}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::AccountExpired));
     }
 
     #[test]
@@ -305,6 +315,27 @@ mod tests {
     fn parse_validate_account_response_classifies_rate_limit() {
         let body = r#"{"status":"KO","message":"Flood detected: please wait"}"#;
         let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::RateLimited(_)));
+    }
+
+    #[test]
+    fn account_api_http_status_classifies_auth_and_rate_limit() {
+        for status in [401, 403] {
+            let response = crate::free_mode::HttpResponse {
+                status,
+                headers: HashMap::new(),
+                body: "Authorization: Bearer must-not-leak".into(),
+            };
+            let error = response.into_success_body().unwrap_err();
+            assert!(matches!(error, PluginError::InvalidCredentials));
+        }
+
+        let response = crate::free_mode::HttpResponse {
+            status: 429,
+            headers: HashMap::new(),
+            body: "slow down".into(),
+        };
+        let error = response.into_success_body().unwrap_err();
         assert!(matches!(error, PluginError::RateLimited(_)));
     }
 
