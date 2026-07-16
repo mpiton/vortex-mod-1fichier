@@ -8,9 +8,9 @@ Resolves `https://1fichier.com/?<id>` URLs in two modes:
   `https://api.1fichier.com/v1/download/get_token.cgi` with bearer auth
   and returns the one-shot direct CDN URL. Skips the wait + captcha.
 - **Free** — falls back to scraping the public landing page when no
-  credential is configured (or when the API rejects the configured
-  key as invalid / expired). The parser surfaces `wait_seconds` and a
-  `requires_captcha` flag as metadata; the host owns the wait
+  credential is configured. A rejected selected credential remains a
+  typed error so Vortex can update account state and rotate. The parser
+  surfaces `wait_seconds` and a `requires_captcha` flag as metadata; the host owns the wait
   scheduling (`WaitManager`, task 39) and the captcha solver pipeline
   (task 43+). `resolve_stream_url` for free mode therefore surfaces
   `PluginError::CaptchaRequired` until the captcha pipeline ships.
@@ -25,10 +25,13 @@ Resolves `https://1fichier.com/?<id>` URLs in two modes:
   - Offline-page detection (file removed / not found)
 - Premium API parser:
   - `status: "OK"` → direct URL + optional `traffic_used` /
-    `traffic_total`
+    `traffic_total`; exhausted traffic is returned as a typed quota error
   - `status: "KO"` → typed errors (`InvalidCredentials`,
-    `AccountExpired`, `RateLimited`, `Offline`, `InvalidApiResponse`)
-- Auto-fallback to free mode when the API key is rejected
+    `AccountExpired`, `QuotaExceeded`, `RateLimited`, `Offline`,
+    `InvalidApiResponse`)
+- Account validation through authenticated `user/info.cgi`, rejecting free or
+  expired offers before selection
+- Stable account error codes for host-side state updates and rotation
 - Resume support advertised on every link
 
 ## Build

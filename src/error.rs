@@ -32,6 +32,9 @@ pub enum PluginError {
     #[error("1fichier API rate-limit exceeded: {0}")]
     RateLimited(String),
 
+    #[error("1fichier premium traffic quota is exhausted")]
+    QuotaExceeded,
+
     #[error("1fichier API returned an unexpected payload: {0}")]
     InvalidApiResponse(String),
 
@@ -39,4 +42,35 @@ pub enum PluginError {
         "1fichier free mode requires a CAPTCHA solution; the captcha solver pipeline is not wired in v1"
     )]
     CaptchaRequired,
+}
+
+impl PluginError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidCredentials => "ACCOUNT_INVALID_CREDENTIALS",
+            Self::AccountExpired => "ACCOUNT_EXPIRED",
+            Self::RateLimited(_) => "ACCOUNT_COOLDOWN",
+            Self::QuotaExceeded => "ACCOUNT_QUOTA_EXCEEDED",
+            _ => "PLUGIN_ERROR",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_errors_have_stable_machine_codes() {
+        assert_eq!(
+            PluginError::InvalidCredentials.code(),
+            "ACCOUNT_INVALID_CREDENTIALS"
+        );
+        assert_eq!(PluginError::AccountExpired.code(), "ACCOUNT_EXPIRED");
+        assert_eq!(
+            PluginError::RateLimited("wait".into()).code(),
+            "ACCOUNT_COOLDOWN"
+        );
+        assert_eq!(PluginError::QuotaExceeded.code(), "ACCOUNT_QUOTA_EXCEEDED");
+    }
 }

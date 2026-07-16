@@ -1,6 +1,6 @@
 [package]
 name = "vortex-mod-1fichier"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "1fichier hoster WASM plugin for Vortex — free (60s wait + captcha stub) and premium (API key)"
 license = "GPL-3.0"

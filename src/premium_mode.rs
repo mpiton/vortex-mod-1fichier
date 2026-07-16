@@ -17,6 +17,7 @@ use crate::free_mode::HttpRequest;
 use crate::USER_AGENT;
 
 const ENDPOINT: &str = "https://api.1fichier.com/v1/download/get_token.cgi";
+const VALIDATE_ENDPOINT: &str = "https://api.1fichier.com/v1/user/info.cgi";
 
 /// Build the host `http_request` envelope for `get_token.cgi`.
 pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, PluginError> {
@@ -36,6 +37,23 @@ pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, 
         url: ENDPOINT.into(),
         headers,
         body: Some(body_json),
+    };
+    serde_json::to_string(&req).map_err(PluginError::SerdeJson)
+}
+
+/// Build the least-expensive authenticated API probe documented by 1fichier.
+/// Listing the root folder validates the API key without requiring a file URL.
+pub fn build_validate_account_request(api_key: &str) -> Result<String, PluginError> {
+    let mut headers = HashMap::new();
+    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    headers.insert("User-Agent".to_string(), USER_AGENT.to_string());
+
+    let req = HttpRequest {
+        method: "POST".into(),
+        url: VALIDATE_ENDPOINT.into(),
+        headers,
+        body: None,
     };
     serde_json::to_string(&req).map_err(PluginError::SerdeJson)
 }
@@ -79,6 +97,12 @@ pub fn parse_get_token_response(body: &str) -> Result<PremiumToken, PluginError>
                 "OK response missing `url` field".into(),
             ));
         }
+        if matches!(
+            (parsed.traffic_used, parsed.traffic_total),
+            (Some(used), Some(total)) if total > 0 && used >= total
+        ) {
+            return Err(PluginError::QuotaExceeded);
+        }
         return Ok(PremiumToken {
             direct_url: parsed.url,
             traffic_used_bytes: parsed.traffic_used,
@@ -87,6 +111,46 @@ pub fn parse_get_token_response(body: &str) -> Result<PremiumToken, PluginError>
     }
 
     Err(classify_ko_message(&parsed.message))
+}
+
+/// Validate that the key belongs to a download-capable paid offer.
+pub fn parse_validate_account_response(body: &str) -> Result<(), PluginError> {
+    #[derive(Deserialize)]
+    struct ApiResponse {
+        #[serde(default)]
+        status: String,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        offer: Option<u8>,
+    }
+
+    let parsed: ApiResponse = serde_json::from_str(body).map_err(|error| {
+        PluginError::InvalidApiResponse(format!("body is not valid JSON: {error}"))
+    })?;
+    if !parsed.status.eq_ignore_ascii_case("OK") {
+        return Err(classify_ko_message(&parsed.message));
+    }
+    match parsed.offer {
+        Some(1..=3) => Ok(()),
+        Some(0) => Err(PluginError::AccountExpired),
+        _ => Err(PluginError::InvalidApiResponse(
+            "user info response missing a recognised offer".into(),
+        )),
+    }
+}
+
+/// Apply account-specific semantics before the generic HTTP envelope parser.
+pub fn into_account_api_body(
+    response: crate::free_mode::HttpResponse,
+) -> Result<String, PluginError> {
+    match response.status {
+        401 | 403 => Err(PluginError::InvalidCredentials),
+        402 => Err(PluginError::AccountExpired),
+        429 => Err(PluginError::RateLimited("HTTP 429".into())),
+        509 => Err(PluginError::QuotaExceeded),
+        _ => response.into_success_body(),
+    }
 }
 
 /// Classify a KO message into a typed error.
@@ -98,6 +162,15 @@ fn classify_ko_message(msg: &str) -> PluginError {
     if lower.contains("subscription") || lower.contains("expired") || lower.contains("not premium")
     {
         return PluginError::AccountExpired;
+    }
+    if lower.contains("quota")
+        || (lower.contains("traffic")
+            && (lower.contains("exceeded")
+                || lower.contains("exhausted")
+                || lower.contains("limit")))
+        || lower.contains("bandwidth limit")
+    {
+        return PluginError::QuotaExceeded;
     }
     if lower.contains("flood") || lower.contains("rate") || lower.contains("too many") {
         return PluginError::RateLimited(msg.to_string());
@@ -152,6 +225,19 @@ mod tests {
         assert_eq!(body["url"], "https://1fichier.com/?abc123def");
     }
 
+    #[test]
+    fn build_validate_account_request_reads_user_offer_with_bearer_auth() {
+        let json = build_validate_account_request("SECRETKEY").unwrap();
+        let request: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(request["method"], "POST");
+        assert_eq!(request["url"], "https://api.1fichier.com/v1/user/info.cgi");
+        assert_eq!(
+            request["headers"]["Authorization"].as_str(),
+            Some("Bearer SECRETKEY")
+        );
+        assert!(request.get("body").is_none());
+    }
+
     // ── Response parser ─────────────────────────────────────────────────────
 
     #[test]
@@ -170,6 +256,20 @@ mod tests {
         let token = parse_get_token_response(body).unwrap();
         assert_eq!(token.traffic_used_bytes, Some(12_345));
         assert_eq!(token.traffic_total_bytes, Some(1_000_000_000));
+    }
+
+    #[test]
+    fn parse_get_token_response_rejects_exhausted_traffic() {
+        let body = r#"{"status":"OK","url":"https://x","traffic_used":1000,"traffic_total":1000}"#;
+        let error = parse_get_token_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::QuotaExceeded));
+    }
+
+    #[test]
+    fn parse_get_token_response_classifies_quota_message() {
+        let body = r#"{"status":"KO","message":"Daily traffic quota exceeded"}"#;
+        let error = parse_get_token_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::QuotaExceeded));
     }
 
     #[test]
@@ -226,6 +326,79 @@ mod tests {
         let body = "not json at all";
         let err = parse_get_token_response(body).unwrap_err();
         assert!(matches!(err, PluginError::InvalidApiResponse(_)));
+    }
+
+    #[test]
+    fn parse_validate_account_response_accepts_download_capable_offers() {
+        for offer in [1, 2, 3] {
+            let body = format!(r#"{{"status":"OK","offer":{offer}}}"#);
+            parse_validate_account_response(&body).expect("premium API key");
+        }
+    }
+
+    #[test]
+    fn parse_validate_account_response_requires_explicit_ok_status() {
+        for body in [r#"{"offer":1}"#, r#"{"status":"","offer":1}"#] {
+            let error = parse_validate_account_response(body).unwrap_err();
+            assert!(matches!(error, PluginError::InvalidApiResponse(_)));
+        }
+    }
+
+    #[test]
+    fn parse_validate_account_response_rejects_free_offer() {
+        let body = r#"{"status":"OK","offer":0}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::AccountExpired));
+    }
+
+    #[test]
+    fn parse_validate_account_response_classifies_invalid_key() {
+        let body = r#"{"status":"KO","message":"Invalid key"}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::InvalidCredentials));
+    }
+
+    #[test]
+    fn parse_validate_account_response_classifies_expired_account() {
+        let body = r#"{"status":"KO","message":"Subscription expired"}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::AccountExpired));
+    }
+
+    #[test]
+    fn parse_validate_account_response_classifies_rate_limit() {
+        let body = r#"{"status":"KO","message":"Flood detected: please wait"}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::RateLimited(_)));
+    }
+
+    #[test]
+    fn account_api_http_status_classifies_auth_and_rate_limit() {
+        for status in [401, 403] {
+            let response = crate::free_mode::HttpResponse {
+                status,
+                headers: HashMap::new(),
+                body: "Authorization: Bearer must-not-leak".into(),
+            };
+            let error = into_account_api_body(response).unwrap_err();
+            assert!(matches!(error, PluginError::InvalidCredentials));
+        }
+
+        let response = crate::free_mode::HttpResponse {
+            status: 429,
+            headers: HashMap::new(),
+            body: "slow down".into(),
+        };
+        let error = into_account_api_body(response).unwrap_err();
+        assert!(matches!(error, PluginError::RateLimited(_)));
+
+        let response = crate::free_mode::HttpResponse {
+            status: 509,
+            headers: HashMap::new(),
+            body: "bandwidth limit exceeded".into(),
+        };
+        let error = into_account_api_body(response).unwrap_err();
+        assert!(matches!(error, PluginError::QuotaExceeded));
     }
 
     // ── Credential parser ───────────────────────────────────────────────────
