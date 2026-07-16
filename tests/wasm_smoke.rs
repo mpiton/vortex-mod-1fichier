@@ -124,3 +124,15 @@ fn wasm_extraction_and_resolution_exports_are_callable() {
         .expect("resolve_stream_url call");
     assert_eq!(direct_url, DIRECT_URL);
 }
+
+#[test]
+fn wasm_validate_account_reads_host_credential_and_calls_api() {
+    let path = require_wasm!();
+    let mut plugin = load_plugin(&path);
+
+    let outcome: String = plugin
+        .call("validate_account", "")
+        .expect("validate_account call");
+    let outcome: Value = serde_json::from_str(&outcome).expect("validation JSON");
+    assert_eq!(outcome["valid"], true);
+}

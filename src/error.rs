@@ -40,3 +40,21 @@ pub enum PluginError {
     )]
     CaptchaRequired,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_errors_have_stable_machine_codes() {
+        assert_eq!(
+            PluginError::InvalidCredentials.code(),
+            "ACCOUNT_INVALID_CREDENTIALS"
+        );
+        assert_eq!(PluginError::AccountExpired.code(), "ACCOUNT_EXPIRED");
+        assert_eq!(
+            PluginError::RateLimited("wait".into()).code(),
+            "ACCOUNT_COOLDOWN"
+        );
+    }
+}

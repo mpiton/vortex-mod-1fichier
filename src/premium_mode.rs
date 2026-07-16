@@ -152,6 +152,21 @@ mod tests {
         assert_eq!(body["url"], "https://1fichier.com/?abc123def");
     }
 
+    #[test]
+    fn build_validate_account_request_lists_root_folder_with_bearer_auth() {
+        let json = build_validate_account_request("SECRETKEY").unwrap();
+        let request: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(request["method"], "POST");
+        assert_eq!(request["url"], VALIDATE_ENDPOINT);
+        assert_eq!(
+            request["headers"]["Authorization"].as_str(),
+            Some("Bearer SECRETKEY")
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(request["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["folder_id"], 0);
+    }
+
     // ── Response parser ─────────────────────────────────────────────────────
 
     #[test]
@@ -226,6 +241,33 @@ mod tests {
         let body = "not json at all";
         let err = parse_get_token_response(body).unwrap_err();
         assert!(matches!(err, PluginError::InvalidApiResponse(_)));
+    }
+
+    #[test]
+    fn parse_validate_account_response_accepts_ok_envelope() {
+        let body = r#"{"status":"OK","count":0,"items":[]}"#;
+        parse_validate_account_response(body).expect("valid API key");
+    }
+
+    #[test]
+    fn parse_validate_account_response_classifies_invalid_key() {
+        let body = r#"{"status":"KO","message":"Invalid key"}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::InvalidCredentials));
+    }
+
+    #[test]
+    fn parse_validate_account_response_classifies_expired_account() {
+        let body = r#"{"status":"KO","message":"Subscription expired"}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::AccountExpired));
+    }
+
+    #[test]
+    fn parse_validate_account_response_classifies_rate_limit() {
+        let body = r#"{"status":"KO","message":"Flood detected: please wait"}"#;
+        let error = parse_validate_account_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::RateLimited(_)));
     }
 
     // ── Credential parser ───────────────────────────────────────────────────
