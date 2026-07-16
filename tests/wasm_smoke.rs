@@ -1,13 +1,8 @@
-//! Smoke test: load the compiled `.wasm` via Extism and call the pure
-//! `can_handle` / `supports_playlist` exports.
+//! Real ABI smoke tests for every runtime export of the release WASM artifact.
+//! Premium credential and HTTP fixtures exercise extraction and resolution
+//! through the same Extism host-function boundary as Vortex.
 //!
-//! `extract_links` and `resolve_stream_url` need a real `http_request`
-//! and `get_credential` round-trip — exercised by the host's own
-//! integration tests, not here. The stub host functions return JSON
-//! envelopes shaped like the real ones so the WASM module loads
-//! without unresolved imports.
-//!
-//! Skipped unless the WASM artifact is present at
+//! Requires the WASM artifact at
 //! `target/wasm32-wasip1/release/vortex_mod_1fichier.wasm`. To produce
 //! it:
 //!
@@ -18,12 +13,20 @@
 use std::path::PathBuf;
 
 use extism::{Function, UserData, Val, PTR};
+use serde_json::{json, Value};
 
 const WASM_REL_PATH: &str = "target/wasm32-wasip1/release/vortex_mod_1fichier.wasm";
+const FILE_URL: &str = "https://1fichier.com/?abc123def456";
+const DIRECT_URL: &str = "https://download.1fichier.com/archive.zip";
 
-fn wasm_path() -> Option<PathBuf> {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(WASM_REL_PATH);
-    p.exists().then_some(p)
+fn wasm_path() -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(WASM_REL_PATH);
+    assert!(
+        path.is_file(),
+        "missing release WASM artifact at {}; run `cargo build --target wasm32-wasip1 --release` first",
+        path.display()
+    );
+    path
 }
 
 fn stub_http_request() -> Function {
@@ -33,8 +36,9 @@ fn stub_http_request() -> Function {
         [PTR],
         UserData::<()>::default(),
         |plugin, _inputs, outputs, _user_data: UserData<()>| {
-            let body = r#"{"status":200,"headers":{},"body":""}"#;
-            let handle = plugin.memory_new(body)?;
+            let api_body = json!({ "status": "OK", "url": DIRECT_URL }).to_string();
+            let response = json!({ "status": 200, "headers": {}, "body": api_body }).to_string();
+            let handle = plugin.memory_new(&response)?;
             outputs[0] = Val::I64(handle.offset() as i64);
             Ok(())
         },
@@ -47,10 +51,11 @@ fn stub_get_credential() -> Function {
         [PTR],
         [PTR],
         UserData::<()>::default(),
-        |_plugin, _inputs, _outputs, _user_data: UserData<()>| {
-            // Mimic the real host: signal "no credential" by returning
-            // an error. The plugin will treat this as "use free mode".
-            Err(extism::Error::msg("no credential configured"))
+        |plugin, _inputs, outputs, _user_data: UserData<()>| {
+            let credential = json!({ "username": "", "password": "test-api-key" }).to_string();
+            let handle = plugin.memory_new(&credential)?;
+            outputs[0] = Val::I64(handle.offset() as i64);
+            Ok(())
         },
     )
 }
@@ -67,15 +72,7 @@ fn load_plugin(path: &PathBuf) -> extism::Plugin {
 
 macro_rules! require_wasm {
     () => {
-        match wasm_path() {
-            Some(p) => p,
-            None => {
-                eprintln!(
-                    "skipping: build with `cargo build --target wasm32-wasip1 --release` first"
-                );
-                return;
-            }
-        }
+        wasm_path()
     };
 }
 
@@ -84,7 +81,7 @@ fn wasm_can_handle_recognises_1fichier_url() {
     let path = require_wasm!();
     let mut plugin = load_plugin(&path);
     let result: String = plugin
-        .call("can_handle", "https://1fichier.com/?abc123def456")
+        .call("can_handle", FILE_URL)
         .expect("can_handle call");
     assert_eq!(result.trim(), "true");
 }
@@ -104,7 +101,26 @@ fn wasm_supports_playlist_always_false() {
     let path = require_wasm!();
     let mut plugin = load_plugin(&path);
     let result: String = plugin
-        .call("supports_playlist", "https://1fichier.com/?abc123def456")
+        .call("supports_playlist", FILE_URL)
         .expect("supports_playlist call");
     assert_eq!(result.trim(), "false");
+}
+
+#[test]
+fn wasm_extraction_and_resolution_exports_are_callable() {
+    let path = require_wasm!();
+    let mut plugin = load_plugin(&path);
+
+    let links: String = plugin
+        .call("extract_links", FILE_URL)
+        .expect("extract_links call");
+    let links: Value = serde_json::from_str(&links).expect("extract_links JSON");
+    assert_eq!(links["kind"], "file");
+    assert_eq!(links["mode"], "premium");
+    assert_eq!(links["files"][0]["direct_url"], DIRECT_URL);
+
+    let direct_url: String = plugin
+        .call("resolve_stream_url", json!({ "url": FILE_URL }).to_string())
+        .expect("resolve_stream_url call");
+    assert_eq!(direct_url, DIRECT_URL);
 }

@@ -34,16 +34,16 @@ Resolves `https://1fichier.com/?<id>` URLs in two modes:
 ## Build
 
 ```bash
-# Native unit + integration tests (no WASM)
-cargo test
-
 # Lint
 cargo clippy --all-targets -- -D warnings
 
-# WASM artefact
+# WASM artefact (required by the smoke test)
 rustup target add wasm32-wasip1   # one-time
 cargo build --target wasm32-wasip1 --release
 # target/wasm32-wasip1/release/vortex_mod_1fichier.wasm
+
+# Native, integration, and mandatory WASM smoke tests
+cargo test
 ```
 
 ## Install (development)
