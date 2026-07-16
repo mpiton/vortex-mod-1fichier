@@ -120,13 +120,33 @@ fn stub_get_credential() -> Function {
     )
 }
 
+fn stub_get_credential_missing() -> Function {
+    Function::new(
+        "get_credential",
+        [PTR],
+        [PTR],
+        UserData::<()>::default(),
+        |_plugin, _inputs, _outputs, _user_data: UserData<()>| {
+            Err(extism::Error::msg("get_credential: no credential found"))
+        },
+    )
+}
+
 fn load_plugin(path: &PathBuf) -> extism::Plugin {
     load_plugin_with_http(path, stub_http_request())
 }
 
 fn load_plugin_with_http(path: &PathBuf, http_request: Function) -> extism::Plugin {
+    load_plugin_with_functions(path, http_request, stub_get_credential())
+}
+
+fn load_plugin_with_functions(
+    path: &PathBuf,
+    http_request: Function,
+    get_credential: Function,
+) -> extism::Plugin {
     let manifest = extism::Manifest::new([extism::Wasm::file(path)]);
-    extism::Plugin::new(&manifest, [http_request, stub_get_credential()], true).expect("load wasm")
+    extism::Plugin::new(&manifest, [http_request, get_credential], true).expect("load wasm")
 }
 
 macro_rules! require_wasm {
@@ -197,6 +217,17 @@ fn wasm_validate_account_reads_host_credential_and_calls_api() {
 }
 
 #[test]
+fn wasm_validate_account_surfaces_missing_credential() {
+    let path = require_wasm!();
+    let mut plugin =
+        load_plugin_with_functions(&path, stub_http_request(), stub_get_credential_missing());
+
+    plugin
+        .call::<_, String>("validate_account", "")
+        .expect_err("validation must fail without a host credential");
+}
+
+#[test]
 fn wasm_premium_resolution_surfaces_invalid_credential_code() {
     let path = require_wasm!();
     let mut plugin = load_plugin_with_http(&path, stub_http_invalid_credential());
@@ -224,7 +255,9 @@ fn wasm_validation_preserves_typed_http_account_failures() {
     for (status, expected_code) in [
         (401, "ACCOUNT_INVALID_CREDENTIALS"),
         (403, "ACCOUNT_INVALID_CREDENTIALS"),
+        (402, "ACCOUNT_EXPIRED"),
         (429, "ACCOUNT_COOLDOWN"),
+        (509, "ACCOUNT_QUOTA_EXCEEDED"),
     ] {
         let mut plugin = load_plugin_with_http(&path, stub_http_status(status));
         let error = plugin

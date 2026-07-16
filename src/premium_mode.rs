@@ -128,7 +128,7 @@ pub fn parse_validate_account_response(body: &str) -> Result<(), PluginError> {
     let parsed: ApiResponse = serde_json::from_str(body).map_err(|error| {
         PluginError::InvalidApiResponse(format!("body is not valid JSON: {error}"))
     })?;
-    if !parsed.status.is_empty() && !parsed.status.eq_ignore_ascii_case("OK") {
+    if !parsed.status.eq_ignore_ascii_case("OK") {
         return Err(classify_ko_message(&parsed.message));
     }
     match parsed.offer {
@@ -333,6 +333,14 @@ mod tests {
         for offer in [1, 2, 3] {
             let body = format!(r#"{{"status":"OK","offer":{offer}}}"#);
             parse_validate_account_response(&body).expect("premium API key");
+        }
+    }
+
+    #[test]
+    fn parse_validate_account_response_requires_explicit_ok_status() {
+        for body in [r#"{"offer":1}"#, r#"{"status":"","offer":1}"#] {
+            let error = parse_validate_account_response(body).unwrap_err();
+            assert!(matches!(error, PluginError::InvalidApiResponse(_)));
         }
     }
 
