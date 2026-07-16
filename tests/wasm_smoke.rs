@@ -45,6 +45,22 @@ fn stub_http_request() -> Function {
     )
 }
 
+fn stub_http_invalid_credential() -> Function {
+    Function::new(
+        "http_request",
+        [PTR],
+        [PTR],
+        UserData::<()>::default(),
+        |plugin, _inputs, outputs, _user_data: UserData<()>| {
+            let api_body = json!({ "status": "KO", "message": "Invalid key" }).to_string();
+            let response = json!({ "status": 200, "headers": {}, "body": api_body }).to_string();
+            let handle = plugin.memory_new(&response)?;
+            outputs[0] = Val::I64(handle.offset() as i64);
+            Ok(())
+        },
+    )
+}
+
 fn stub_get_credential() -> Function {
     Function::new(
         "get_credential",
@@ -61,13 +77,12 @@ fn stub_get_credential() -> Function {
 }
 
 fn load_plugin(path: &PathBuf) -> extism::Plugin {
+    load_plugin_with_http(path, stub_http_request())
+}
+
+fn load_plugin_with_http(path: &PathBuf, http_request: Function) -> extism::Plugin {
     let manifest = extism::Manifest::new([extism::Wasm::file(path)]);
-    extism::Plugin::new(
-        &manifest,
-        [stub_http_request(), stub_get_credential()],
-        true,
-    )
-    .expect("load wasm")
+    extism::Plugin::new(&manifest, [http_request, stub_get_credential()], true).expect("load wasm")
 }
 
 macro_rules! require_wasm {
@@ -135,4 +150,15 @@ fn wasm_validate_account_reads_host_credential_and_calls_api() {
         .expect("validate_account call");
     let outcome: Value = serde_json::from_str(&outcome).expect("validation JSON");
     assert_eq!(outcome["valid"], true);
+}
+
+#[test]
+fn wasm_premium_resolution_surfaces_invalid_credential_code() {
+    let path = require_wasm!();
+    let mut plugin = load_plugin_with_http(&path, stub_http_invalid_credential());
+
+    let error = plugin
+        .call::<_, String>("extract_links", FILE_URL)
+        .expect_err("invalid selected credential must not silently fall back to free mode");
+    assert!(error.to_string().contains("ACCOUNT_INVALID_CREDENTIALS"));
 }
