@@ -3,15 +3,14 @@
 //! Mode selection rule:
 //!  1. Try `get_credential("vortex-mod-1fichier")` — if a non-empty key
 //!     is returned, attempt the premium API.
-//!  2. If the API rejects the key with [`PluginError::InvalidCredentials`]
-//!     or [`PluginError::AccountExpired`], fall back to free mode so
-//!     the host can still surface the file.
+//!  2. If the API rejects a selected credential, return a typed error so
+//!     Vortex can update account state and rotate to another account.
 //!  3. If no credential is configured, jump straight to free mode.
 //!
-//! `extract_links` always succeeds (free response is a valid metadata
-//! payload). `resolve_stream_url` only succeeds in premium mode — free
-//! mode surfaces [`PluginError::CaptchaRequired`] until the captcha
-//! pipeline ships (task 43+).
+//! `extract_links` returns a free metadata payload when no credential is
+//! selected, or a typed account error when a selected credential fails.
+//! `resolve_stream_url` only succeeds in premium mode — free mode surfaces
+//! [`PluginError::CaptchaRequired`] until the captcha pipeline ships (task 43+).
 
 use extism_pdk::*;
 
@@ -20,7 +19,8 @@ use crate::free_mode::{
     build_landing_request, parse_http_response, parse_landing_page, ParsedLanding,
 };
 use crate::premium_mode::{
-    build_get_token_request, parse_credential_response, parse_get_token_response, PremiumToken,
+    build_get_token_request, build_validate_account_request, parse_credential_response,
+    parse_get_token_response, parse_validate_account_response, PremiumToken,
 };
 use crate::{
     build_free_response, build_premium_response, ensure_file_url, handle_can_handle,
@@ -43,6 +43,24 @@ pub fn can_handle(url: String) -> FnResult<String> {
 #[plugin_fn]
 pub fn supports_playlist(url: String) -> FnResult<String> {
     Ok(handle_supports_playlist(&url))
+}
+
+#[plugin_fn]
+pub fn validate_account(_input: String) -> FnResult<String> {
+    let key = read_api_key().ok_or_else(|| {
+        error_to_fn_error(PluginError::HostResponse(
+            "account credential is unavailable".into(),
+        ))
+    })?;
+    let request = build_validate_account_request(&key).map_err(error_to_fn_error)?;
+    // SAFETY: host registers `http_request` before any export is callable.
+    let raw = unsafe { http_request(request) }
+        .map_err(|error| PluginError::HostResponse(format!("http_request: {error}")))
+        .map_err(error_to_fn_error)?;
+    let response = parse_http_response(&raw).map_err(error_to_fn_error)?;
+    let body = response.into_success_body().map_err(error_to_fn_error)?;
+    parse_validate_account_response(&body).map_err(error_to_fn_error)?;
+    Ok(serde_json::json!({ "valid": true }).to_string())
 }
 
 #[plugin_fn]
@@ -94,29 +112,17 @@ enum ResolvedMode {
 
 fn select_mode_and_resolve(url: &str) -> FnResult<ResolvedMode> {
     match read_api_key() {
-        Some(key) => match try_premium(url, &key) {
-            Ok(token) => Ok(ResolvedMode::Premium {
+        Some(key) => try_premium(url, &key)
+            .map(|token| ResolvedMode::Premium {
                 token,
                 landing_hint: None,
-            }),
-            Err(e) if is_credential_failure(&e) => {
-                let parsed = fetch_and_parse_landing(url)?;
-                Ok(ResolvedMode::Free { parsed })
-            }
-            Err(other) => Err(error_to_fn_error(other)),
-        },
+            })
+            .map_err(error_to_fn_error),
         None => {
             let parsed = fetch_and_parse_landing(url)?;
             Ok(ResolvedMode::Free { parsed })
         }
     }
-}
-
-fn is_credential_failure(err: &PluginError) -> bool {
-    matches!(
-        err,
-        PluginError::InvalidCredentials | PluginError::AccountExpired
-    )
 }
 
 fn read_api_key() -> Option<String> {
@@ -149,5 +155,5 @@ fn fetch_and_parse_landing(url: &str) -> FnResult<ParsedLanding> {
 }
 
 fn error_to_fn_error(err: PluginError) -> WithReturnCode<extism_pdk::Error> {
-    extism_pdk::Error::msg(err.to_string()).into()
+    extism_pdk::Error::msg(format!("{}: {err}", err.code())).into()
 }

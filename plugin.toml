@@ -1,6 +1,6 @@
 [plugin]
 name = "vortex-mod-1fichier"
-version = "1.0.0"
+version = "1.1.0"
 category = "hoster"
 author = "vortex-community"
 description = "1fichier hoster — free (60s wait + captcha stub) and premium (API key)"

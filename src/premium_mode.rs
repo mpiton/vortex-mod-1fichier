@@ -17,6 +17,7 @@ use crate::free_mode::HttpRequest;
 use crate::USER_AGENT;
 
 const ENDPOINT: &str = "https://api.1fichier.com/v1/download/get_token.cgi";
+const VALIDATE_ENDPOINT: &str = "https://api.1fichier.com/v1/file/ls.cgi";
 
 /// Build the host `http_request` envelope for `get_token.cgi`.
 pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, PluginError> {
@@ -34,6 +35,24 @@ pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, 
     let req = HttpRequest {
         method: "POST".into(),
         url: ENDPOINT.into(),
+        headers,
+        body: Some(body_json),
+    };
+    serde_json::to_string(&req).map_err(PluginError::SerdeJson)
+}
+
+/// Build the least-expensive authenticated API probe documented by 1fichier.
+/// Listing the root folder validates the API key without requiring a file URL.
+pub fn build_validate_account_request(api_key: &str) -> Result<String, PluginError> {
+    let mut headers = HashMap::new();
+    headers.insert("Authorization".to_string(), format!("Bearer {api_key}"));
+    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    headers.insert("User-Agent".to_string(), USER_AGENT.to_string());
+
+    let body_json = serde_json::json!({ "folder_id": 0 }).to_string();
+    let req = HttpRequest {
+        method: "POST".into(),
+        url: VALIDATE_ENDPOINT.into(),
         headers,
         body: Some(body_json),
     };
@@ -86,6 +105,25 @@ pub fn parse_get_token_response(body: &str) -> Result<PremiumToken, PluginError>
         });
     }
 
+    Err(classify_ko_message(&parsed.message))
+}
+
+/// Validate the common 1fichier API status envelope returned by `file/ls.cgi`.
+pub fn parse_validate_account_response(body: &str) -> Result<(), PluginError> {
+    #[derive(Deserialize)]
+    struct ApiResponse {
+        #[serde(default)]
+        status: String,
+        #[serde(default)]
+        message: String,
+    }
+
+    let parsed: ApiResponse = serde_json::from_str(body).map_err(|error| {
+        PluginError::InvalidApiResponse(format!("body is not valid JSON: {error}"))
+    })?;
+    if parsed.status.eq_ignore_ascii_case("OK") {
+        return Ok(());
+    }
     Err(classify_ko_message(&parsed.message))
 }
 

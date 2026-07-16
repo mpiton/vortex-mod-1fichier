@@ -41,6 +41,17 @@ pub enum PluginError {
     CaptchaRequired,
 }
 
+impl PluginError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidCredentials => "ACCOUNT_INVALID_CREDENTIALS",
+            Self::AccountExpired => "ACCOUNT_EXPIRED",
+            Self::RateLimited(_) => "ACCOUNT_COOLDOWN",
+            _ => "PLUGIN_ERROR",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
