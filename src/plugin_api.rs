@@ -19,8 +19,9 @@ use crate::free_mode::{
     build_landing_request, parse_http_response, parse_landing_page, ParsedLanding,
 };
 use crate::premium_mode::{
-    build_get_token_request, build_validate_account_request, parse_credential_response,
-    parse_get_token_response, parse_validate_account_response, PremiumToken,
+    build_get_token_request, build_validate_account_request, into_account_api_body,
+    parse_credential_response, parse_get_token_response, parse_validate_account_response,
+    PremiumToken,
 };
 use crate::{
     build_free_response, build_premium_response, ensure_file_url, handle_can_handle,
@@ -58,7 +59,7 @@ pub fn validate_account(_input: String) -> FnResult<String> {
         .map_err(|error| PluginError::HostResponse(format!("http_request: {error}")))
         .map_err(error_to_fn_error)?;
     let response = parse_http_response(&raw).map_err(error_to_fn_error)?;
-    let body = response.into_success_body().map_err(error_to_fn_error)?;
+    let body = into_account_api_body(response).map_err(error_to_fn_error)?;
     parse_validate_account_response(&body).map_err(error_to_fn_error)?;
     Ok(serde_json::json!({ "valid": true }).to_string())
 }
@@ -139,7 +140,7 @@ fn try_premium(url: &str, api_key: &str) -> Result<PremiumToken, PluginError> {
     let raw = unsafe { http_request(req) }
         .map_err(|e| PluginError::HostResponse(format!("http_request: {e}")))?;
     let resp = parse_http_response(&raw)?;
-    let body = resp.into_success_body()?;
+    let body = into_account_api_body(resp)?;
     parse_get_token_response(&body)
 }
 

@@ -35,9 +35,31 @@ fn stub_http_request() -> Function {
         [PTR],
         [PTR],
         UserData::<()>::default(),
-        |plugin, _inputs, outputs, _user_data: UserData<()>| {
-            let api_body = json!({ "status": "OK", "url": DIRECT_URL }).to_string();
+        |plugin, inputs, outputs, _user_data: UserData<()>| {
+            let request: Vec<u8> = plugin.memory_get_val(&inputs[0])?;
+            let request = String::from_utf8(request)?;
+            let api_body = if request.contains("/user/info.cgi") {
+                json!({ "status": "OK", "offer": 1 }).to_string()
+            } else {
+                json!({ "status": "OK", "url": DIRECT_URL }).to_string()
+            };
             let response = json!({ "status": 200, "headers": {}, "body": api_body }).to_string();
+            let handle = plugin.memory_new(&response)?;
+            outputs[0] = Val::I64(handle.offset() as i64);
+            Ok(())
+        },
+    )
+}
+
+fn stub_http_status(status: u16) -> Function {
+    Function::new(
+        "http_request",
+        [PTR],
+        [PTR],
+        UserData::<()>::default(),
+        move |plugin, _inputs, outputs, _user_data: UserData<()>| {
+            let response =
+                json!({ "status": status, "headers": {}, "body": "untrusted" }).to_string();
             let handle = plugin.memory_new(&response)?;
             outputs[0] = Val::I64(handle.offset() as i64);
             Ok(())
@@ -161,4 +183,23 @@ fn wasm_premium_resolution_surfaces_invalid_credential_code() {
         .call::<_, String>("extract_links", FILE_URL)
         .expect_err("invalid selected credential must not silently fall back to free mode");
     assert!(error.to_string().contains("ACCOUNT_INVALID_CREDENTIALS"));
+}
+
+#[test]
+fn wasm_validation_preserves_typed_http_account_failures() {
+    let path = require_wasm!();
+    for (status, expected_code) in [
+        (401, "ACCOUNT_INVALID_CREDENTIALS"),
+        (403, "ACCOUNT_INVALID_CREDENTIALS"),
+        (429, "ACCOUNT_COOLDOWN"),
+    ] {
+        let mut plugin = load_plugin_with_http(&path, stub_http_status(status));
+        let error = plugin
+            .call::<_, String>("validate_account", "")
+            .expect_err("HTTP account failure must remain typed");
+        assert!(
+            error.to_string().contains(expected_code),
+            "status {status} returned {error}"
+        );
+    }
 }

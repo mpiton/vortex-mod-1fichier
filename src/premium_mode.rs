@@ -17,7 +17,7 @@ use crate::free_mode::HttpRequest;
 use crate::USER_AGENT;
 
 const ENDPOINT: &str = "https://api.1fichier.com/v1/download/get_token.cgi";
-const VALIDATE_ENDPOINT: &str = "https://api.1fichier.com/v1/file/ls.cgi";
+const VALIDATE_ENDPOINT: &str = "https://api.1fichier.com/v1/user/info.cgi";
 
 /// Build the host `http_request` envelope for `get_token.cgi`.
 pub fn build_get_token_request(file_url: &str, api_key: &str) -> Result<String, PluginError> {
@@ -49,12 +49,11 @@ pub fn build_validate_account_request(api_key: &str) -> Result<String, PluginErr
     headers.insert("Content-Type".to_string(), "application/json".to_string());
     headers.insert("User-Agent".to_string(), USER_AGENT.to_string());
 
-    let body_json = serde_json::json!({ "folder_id": 0 }).to_string();
     let req = HttpRequest {
         method: "POST".into(),
         url: VALIDATE_ENDPOINT.into(),
         headers,
-        body: Some(body_json),
+        body: None,
     };
     serde_json::to_string(&req).map_err(PluginError::SerdeJson)
 }
@@ -108,7 +107,7 @@ pub fn parse_get_token_response(body: &str) -> Result<PremiumToken, PluginError>
     Err(classify_ko_message(&parsed.message))
 }
 
-/// Validate the common 1fichier API status envelope returned by `file/ls.cgi`.
+/// Validate that the key belongs to a download-capable paid offer.
 pub fn parse_validate_account_response(body: &str) -> Result<(), PluginError> {
     #[derive(Deserialize)]
     struct ApiResponse {
@@ -116,15 +115,35 @@ pub fn parse_validate_account_response(body: &str) -> Result<(), PluginError> {
         status: String,
         #[serde(default)]
         message: String,
+        #[serde(default)]
+        offer: Option<u8>,
     }
 
     let parsed: ApiResponse = serde_json::from_str(body).map_err(|error| {
         PluginError::InvalidApiResponse(format!("body is not valid JSON: {error}"))
     })?;
-    if parsed.status.eq_ignore_ascii_case("OK") {
-        return Ok(());
+    if !parsed.status.is_empty() && !parsed.status.eq_ignore_ascii_case("OK") {
+        return Err(classify_ko_message(&parsed.message));
     }
-    Err(classify_ko_message(&parsed.message))
+    match parsed.offer {
+        Some(1..=3) => Ok(()),
+        Some(0) => Err(PluginError::AccountExpired),
+        _ => Err(PluginError::InvalidApiResponse(
+            "user info response missing a recognised offer".into(),
+        )),
+    }
+}
+
+/// Apply account-specific semantics before the generic HTTP envelope parser.
+pub fn into_account_api_body(
+    response: crate::free_mode::HttpResponse,
+) -> Result<String, PluginError> {
+    match response.status {
+        401 | 403 => Err(PluginError::InvalidCredentials),
+        402 => Err(PluginError::AccountExpired),
+        429 => Err(PluginError::RateLimited("HTTP 429".into())),
+        _ => response.into_success_body(),
+    }
 }
 
 /// Classify a KO message into a typed error.
@@ -195,10 +214,7 @@ mod tests {
         let json = build_validate_account_request("SECRETKEY").unwrap();
         let request: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(request["method"], "POST");
-        assert_eq!(
-            request["url"],
-            "https://api.1fichier.com/v1/user/info.cgi"
-        );
+        assert_eq!(request["url"], "https://api.1fichier.com/v1/user/info.cgi");
         assert_eq!(
             request["headers"]["Authorization"].as_str(),
             Some("Bearer SECRETKEY")
@@ -326,7 +342,7 @@ mod tests {
                 headers: HashMap::new(),
                 body: "Authorization: Bearer must-not-leak".into(),
             };
-            let error = response.into_success_body().unwrap_err();
+            let error = into_account_api_body(response).unwrap_err();
             assert!(matches!(error, PluginError::InvalidCredentials));
         }
 
@@ -335,7 +351,7 @@ mod tests {
             headers: HashMap::new(),
             body: "slow down".into(),
         };
-        let error = response.into_success_body().unwrap_err();
+        let error = into_account_api_body(response).unwrap_err();
         assert!(matches!(error, PluginError::RateLimited(_)));
     }
 

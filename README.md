@@ -28,7 +28,8 @@ Resolves `https://1fichier.com/?<id>` URLs in two modes:
     `traffic_total`
   - `status: "KO"` → typed errors (`InvalidCredentials`,
     `AccountExpired`, `RateLimited`, `Offline`, `InvalidApiResponse`)
-- Account validation through the authenticated `file/ls.cgi` API endpoint
+- Account validation through authenticated `user/info.cgi`, rejecting free or
+  expired offers before selection
 - Stable account error codes for host-side state updates and rotation
 - Resume support advertised on every link
 

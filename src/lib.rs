@@ -11,8 +11,9 @@
 //!    store under the plugin's own service name. Hits the JSON API
 //!    (`api.1fichier.com/v1/download/get_token.cgi`) and returns the
 //!    one-shot direct CDN URL. Skips wait + captcha.
-//!  - **Free** — falls back to the public landing page when no
-//!    credential is present (or the credential is rejected by the API).
+//!  - **Free** — falls back to the public landing page only when no
+//!    credential is selected. Rejected credentials remain typed errors so
+//!    Vortex can update account state and rotate.
 //!    The landing page parser surfaces `wait_seconds` and a captcha
 //!    flag as metadata; the host owns the wait scheduling (task 39 —
 //!    `WaitManager`) and the captcha solver pipeline (task 43+).
