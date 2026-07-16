@@ -97,6 +97,12 @@ pub fn parse_get_token_response(body: &str) -> Result<PremiumToken, PluginError>
                 "OK response missing `url` field".into(),
             ));
         }
+        if matches!(
+            (parsed.traffic_used, parsed.traffic_total),
+            (Some(used), Some(total)) if total > 0 && used >= total
+        ) {
+            return Err(PluginError::QuotaExceeded);
+        }
         return Ok(PremiumToken {
             direct_url: parsed.url,
             traffic_used_bytes: parsed.traffic_used,
@@ -142,6 +148,7 @@ pub fn into_account_api_body(
         401 | 403 => Err(PluginError::InvalidCredentials),
         402 => Err(PluginError::AccountExpired),
         429 => Err(PluginError::RateLimited("HTTP 429".into())),
+        509 => Err(PluginError::QuotaExceeded),
         _ => response.into_success_body(),
     }
 }
@@ -155,6 +162,15 @@ fn classify_ko_message(msg: &str) -> PluginError {
     if lower.contains("subscription") || lower.contains("expired") || lower.contains("not premium")
     {
         return PluginError::AccountExpired;
+    }
+    if lower.contains("quota")
+        || (lower.contains("traffic")
+            && (lower.contains("exceeded")
+                || lower.contains("exhausted")
+                || lower.contains("limit")))
+        || lower.contains("bandwidth limit")
+    {
+        return PluginError::QuotaExceeded;
     }
     if lower.contains("flood") || lower.contains("rate") || lower.contains("too many") {
         return PluginError::RateLimited(msg.to_string());
@@ -240,6 +256,20 @@ mod tests {
         let token = parse_get_token_response(body).unwrap();
         assert_eq!(token.traffic_used_bytes, Some(12_345));
         assert_eq!(token.traffic_total_bytes, Some(1_000_000_000));
+    }
+
+    #[test]
+    fn parse_get_token_response_rejects_exhausted_traffic() {
+        let body = r#"{"status":"OK","url":"https://x","traffic_used":1000,"traffic_total":1000}"#;
+        let error = parse_get_token_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::QuotaExceeded));
+    }
+
+    #[test]
+    fn parse_get_token_response_classifies_quota_message() {
+        let body = r#"{"status":"KO","message":"Daily traffic quota exceeded"}"#;
+        let error = parse_get_token_response(body).unwrap_err();
+        assert!(matches!(error, PluginError::QuotaExceeded));
     }
 
     #[test]
@@ -353,6 +383,14 @@ mod tests {
         };
         let error = into_account_api_body(response).unwrap_err();
         assert!(matches!(error, PluginError::RateLimited(_)));
+
+        let response = crate::free_mode::HttpResponse {
+            status: 509,
+            headers: HashMap::new(),
+            body: "bandwidth limit exceeded".into(),
+        };
+        let error = into_account_api_body(response).unwrap_err();
+        assert!(matches!(error, PluginError::QuotaExceeded));
     }
 
     // ── Credential parser ───────────────────────────────────────────────────

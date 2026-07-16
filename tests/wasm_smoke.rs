@@ -83,6 +83,28 @@ fn stub_http_invalid_credential() -> Function {
     )
 }
 
+fn stub_http_exhausted_traffic() -> Function {
+    Function::new(
+        "http_request",
+        [PTR],
+        [PTR],
+        UserData::<()>::default(),
+        |plugin, _inputs, outputs, _user_data: UserData<()>| {
+            let api_body = json!({
+                "status": "OK",
+                "url": DIRECT_URL,
+                "traffic_used": 1000,
+                "traffic_total": 1000
+            })
+            .to_string();
+            let response = json!({ "status": 200, "headers": {}, "body": api_body }).to_string();
+            let handle = plugin.memory_new(&response)?;
+            outputs[0] = Val::I64(handle.offset() as i64);
+            Ok(())
+        },
+    )
+}
+
 fn stub_get_credential() -> Function {
     Function::new(
         "get_credential",
@@ -183,6 +205,17 @@ fn wasm_premium_resolution_surfaces_invalid_credential_code() {
         .call::<_, String>("extract_links", FILE_URL)
         .expect_err("invalid selected credential must not silently fall back to free mode");
     assert!(error.to_string().contains("ACCOUNT_INVALID_CREDENTIALS"));
+}
+
+#[test]
+fn wasm_premium_resolution_surfaces_exhausted_quota_code() {
+    let path = require_wasm!();
+    let mut plugin = load_plugin_with_http(&path, stub_http_exhausted_traffic());
+
+    let error = plugin
+        .call::<_, String>("extract_links", FILE_URL)
+        .expect_err("exhausted premium traffic must rotate to another account");
+    assert!(error.to_string().contains("ACCOUNT_QUOTA_EXCEEDED"));
 }
 
 #[test]

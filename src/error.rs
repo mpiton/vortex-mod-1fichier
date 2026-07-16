@@ -32,6 +32,9 @@ pub enum PluginError {
     #[error("1fichier API rate-limit exceeded: {0}")]
     RateLimited(String),
 
+    #[error("1fichier premium traffic quota is exhausted")]
+    QuotaExceeded,
+
     #[error("1fichier API returned an unexpected payload: {0}")]
     InvalidApiResponse(String),
 
@@ -47,6 +50,7 @@ impl PluginError {
             Self::InvalidCredentials => "ACCOUNT_INVALID_CREDENTIALS",
             Self::AccountExpired => "ACCOUNT_EXPIRED",
             Self::RateLimited(_) => "ACCOUNT_COOLDOWN",
+            Self::QuotaExceeded => "ACCOUNT_QUOTA_EXCEEDED",
             _ => "PLUGIN_ERROR",
         }
     }
@@ -67,5 +71,6 @@ mod tests {
             PluginError::RateLimited("wait".into()).code(),
             "ACCOUNT_COOLDOWN"
         );
+        assert_eq!(PluginError::QuotaExceeded.code(), "ACCOUNT_QUOTA_EXCEEDED");
     }
 }

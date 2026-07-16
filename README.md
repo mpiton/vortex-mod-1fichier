@@ -25,9 +25,10 @@ Resolves `https://1fichier.com/?<id>` URLs in two modes:
   - Offline-page detection (file removed / not found)
 - Premium API parser:
   - `status: "OK"` → direct URL + optional `traffic_used` /
-    `traffic_total`
+    `traffic_total`; exhausted traffic is returned as a typed quota error
   - `status: "KO"` → typed errors (`InvalidCredentials`,
-    `AccountExpired`, `RateLimited`, `Offline`, `InvalidApiResponse`)
+    `AccountExpired`, `QuotaExceeded`, `RateLimited`, `Offline`,
+    `InvalidApiResponse`)
 - Account validation through authenticated `user/info.cgi`, rejecting free or
   expired offers before selection
 - Stable account error codes for host-side state updates and rotation
